@@ -6,7 +6,7 @@ LABEL description "A Docker image allowing to run an Android emulator"
 LABEL version "1.2.0"
 ENV DEBIAN_FRONTEND noninteractive
 
-# Install NVIDIA container toolkit and OpenGL support
+# Install NVIDIA container toolkit, OpenGL support, and scrcpy dependencies
 RUN apt update -y && \
   apt install -y --no-install-recommends \
   bash \
@@ -36,8 +36,18 @@ RUN apt update -y && \
   libegl1 \
   libgles2 \
   mesa-utils \
-  vulkan-tools && \
+  vulkan-tools \
+  ffmpeg \
+  libsdl2-2.0-0 \
+  libusb-1.0-0 \
+  libxcb-cursor0 \
+  x11-xserver-utils && \
   rm -rf /var/lib/apt/lists/*
+
+# Install scrcpy for low-latency screen mirroring
+# scrcpy provides ~30ms latency vs VNC's ~100-200ms
+RUN wget -q https://github.com/Genymobile/scrcpy/releases/download/v2.4/scrcpy-server-v2.4 -O /opt/scrcpy-server && \
+  chmod +x /opt/scrcpy-server
 
 # Configure NVIDIA runtime environment
 ENV NVIDIA_VISIBLE_DEVICES=all

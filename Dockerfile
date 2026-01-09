@@ -13,7 +13,8 @@ RUN apt update && apt install -y curl \
 	libxkbcommon-dev libgbm-dev libasound-dev libnss3 \
 	libxcursor1 libpulse-dev libxshmfence-dev \
 	xauth xvfb x11vnc fluxbox wmctrl libdbus-glib-1-2 socat \
-	virt-manager
+	virt-manager novnc iproute2 libxcb-cursor0 x11-xserver-utils && \
+	rm -rf /var/lib/apt/lists/*
 
 
 # Docker labels.
@@ -54,9 +55,9 @@ ENV LD_LIBRARY_PATH "$ANDROID_SDK_ROOT/emulator/lib64:$ANDROID_SDK_ROOT/emulator
 # Set the working directory to /opt
 WORKDIR /opt
 
-# Exposing the Android emulator console port
-# and the ADB port.
-EXPOSE 5554 5555
+# Exposing the Android emulator console port,
+# the ADB port, and VNC/noVNC ports.
+EXPOSE 5554 5555 5900 6080
 
 # Initializing the required directories.
 RUN mkdir /root/.android/ && \

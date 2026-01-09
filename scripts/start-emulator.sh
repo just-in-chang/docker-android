@@ -17,6 +17,12 @@ AUTH_FLAG=
 WINDOW_FLAG="-no-window"
 SNAPSHOT_FLAG=""
 
+# Configure ADB vendor keys if available
+if [ -f /root/.android/adbkey ]; then
+  export ADB_VENDOR_KEYS=/root/.android/adbkey
+  echo "ADB vendor keys configured from /root/.android/adbkey"
+fi
+
 # Start ADB server by listening on all interfaces.
 echo "Starting the ADB server ..."
 adb -a -P 5037 server nodaemon &
@@ -33,6 +39,11 @@ export USER=root
 echo "Cleaning up stale lock files..."
 rm -f /data/*.lock /data/android.avd/*.lock 2>/dev/null || true
 rm -rf /tmp/android-* 2>/dev/null || true
+# Clean up stale X server lock files (critical for Xvfb restart)
+rm -f /tmp/.X*-lock 2>/dev/null || true
+rm -rf /tmp/.X11-unix 2>/dev/null || true
+mkdir -p /tmp/.X11-unix
+chmod 1777 /tmp/.X11-unix
 
 # Creating the Android Virtual Emulator.
 TEST_AVD=$(avdmanager list avd | grep -c "android.avd" || true)
@@ -73,72 +84,121 @@ export DISPLAY=":0.0"
 echo "Detecting GPU..."
 
 # =============================================================================
-# WSL2 + Docker GPU Rendering Limitation:
+# GPU Rendering Detection:
 # =============================================================================
-# WSL2 exposes GPU via D3D12 translation, NOT native OpenGL/Vulkan drivers.
-# The Android emulator's "host" mode requires native GPU drivers which crash 
-# in this environment.
-#
-# Available modes:
-# - swangle_indirect: SwiftShader(Vulkan) + ANGLE(OpenGL ES) - RECOMMENDED
-# - swiftshader_indirect: Pure SwiftShader - slower
-# - host: Native GPU - CRASHES in WSL2/Docker
-#
-# For true GPU acceleration, run the emulator natively on Windows, not in Docker.
+# Detect if we're running in WSL2 or native Linux:
+# - WSL2: Uses D3D12 translation, can't use native GPU - use software rendering
+# - Native Linux: Can use host GPU acceleration directly
 # =============================================================================
 
-# Remove faulty NVIDIA Vulkan ICD that causes VK_ERROR_INCOMPATIBLE_DRIVER
-if [ -f /usr/share/vulkan/icd.d/nvidia_icd.json ]; then
-  echo "Removing incompatible NVIDIA Vulkan ICD (broken in WSL2)..."
-  rm -f /usr/share/vulkan/icd.d/nvidia_icd.json 2>/dev/null || true
-  rm -f /usr/share/vulkan/icd.d/nvidia_layers.json 2>/dev/null || true
+# Detect WSL2 environment
+IS_WSL2=false
+if grep -qi "microsoft\|wsl" /proc/version 2>/dev/null; then
+  IS_WSL2=true
+fi
+if [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]; then
+  IS_WSL2=true
 fi
 
-if nvidia-smi &>/dev/null; then
-  echo "NVIDIA GPU detected:"
-  nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
-  echo ""
-  echo "⚠️  NOTE: GPU detected but cannot be used for rendering in WSL2/Docker."
-  echo "   WSL2 uses D3D12 translation which is incompatible with Android emulator's 'host' mode."
-  echo "   Using 'swangle_indirect' (SwiftShader + ANGLE) for reliable rendering."
-  echo ""
+if [ "$IS_WSL2" = true ]; then
+  echo "WSL2 environment detected"
+  # Remove faulty NVIDIA Vulkan ICD that causes VK_ERROR_INCOMPATIBLE_DRIVER in WSL2
+  if [ -f /usr/share/vulkan/icd.d/nvidia_icd.json ]; then
+    echo "Removing incompatible NVIDIA Vulkan ICD (broken in WSL2)..."
+    rm -f /usr/share/vulkan/icd.d/nvidia_icd.json 2>/dev/null || true
+    rm -f /usr/share/vulkan/icd.d/nvidia_layers.json 2>/dev/null || true
+  fi
+  
+  if nvidia-smi &>/dev/null; then
+    echo "NVIDIA GPU detected:"
+    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+    echo ""
+    echo "⚠️  NOTE: GPU detected but cannot be used for rendering in WSL2."
+    echo "   WSL2 uses D3D12 translation which is incompatible with Android emulator's 'host' mode."
+    echo "   Using 'swangle_indirect' (SwiftShader + ANGLE) for reliable rendering."
+    echo ""
+  fi
+  # Use software rendering for WSL2
+  export GPU_MODE="${GPU_MODE:-swangle_indirect}"
+  echo "GPU mode: $GPU_MODE (optimized software rendering for WSL2)"
 else
-  echo "No NVIDIA GPU detected"
+  echo "Native Linux environment detected"
+  if nvidia-smi &>/dev/null; then
+    echo "NVIDIA GPU detected:"
+    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+    echo ""
+    echo "✅ Using host GPU acceleration for rendering"
+    export GPU_MODE="${GPU_MODE:-host}"
+  else
+    echo "No NVIDIA GPU detected, using software rendering"
+    export GPU_MODE="${GPU_MODE:-swangle_indirect}"
+  fi
+  echo "GPU mode: $GPU_MODE"
 fi
 
-# Use swangle_indirect - it's the best option for containerized environments
-# SwiftShader provides Vulkan, ANGLE provides OpenGL ES
-export GPU_MODE="${GPU_MODE:-swangle_indirect}"
-echo "GPU mode: $GPU_MODE (optimized software rendering)"
-
-# Allow override from environment
+# Allow override from environment variable
 GPU_MODE=${GPU_MODE_OVERRIDE:-$GPU_MODE}
 
 # Start Xvfb with configured resolution (higher color depth for better quality)
 echo "Starting Xvfb..."
 Xvfb "$DISPLAY" -screen 0 ${SCREEN_WIDTH}x${SCREEN_HEIGHT}x24 +extension GLX -nolisten tcp &
-sleep 2
+XVFB_PID=$!
+
+# Wait for Xvfb to be ready (up to 10 seconds)
+XVFB_READY=false
+for i in {1..20}; do
+  if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+    XVFB_READY=true
+    echo "Xvfb started successfully on display $DISPLAY"
+    break
+  fi
+  sleep 0.5
+done
+
+if [ "$XVFB_READY" = false ]; then
+  echo "WARNING: Xvfb failed to start on display $DISPLAY"
+  # Check if the process is still running
+  if ! kill -0 $XVFB_PID 2>/dev/null; then
+    echo "Xvfb process died, check for display conflicts"
+  fi
+fi
 
 # Start VNC server and noVNC if enabled
 if [ "$OPT_ENABLE_VNC" == "true" ]; then
-  echo "Starting VNC server..."
   WINDOW_FLAG=""  # Show window when VNC is enabled
   
-  # Start x11vnc with performance optimizations
-  x11vnc -display "$DISPLAY" -forever -shared -rfbport 5900 -nopw \
-    -xkb -noxrecord -noxfixes -noxdamage \
-    -wait 5 -defer 5 \
-    -threads -ncache 10 -ncache_cr &
-  sleep 1
-  
-  # Start noVNC for web browser access
-  echo "Starting noVNC web server on port 6080..."
-  /usr/share/novnc/utils/launch.sh --vnc localhost:5900 --listen 6080 &
-  
-  echo "==================================================="
-  echo "VNC is enabled!"
-  echo "Access the emulator UI at: http://localhost:6080"
-  echo "==================================================="
+  if [ "$XVFB_READY" = true ]; then
+    echo "Starting VNC server..."
+    # Start x11vnc with low-latency gaming optimizations
+    x11vnc -display "$DISPLAY" -forever -shared -rfbport 5900 -nopw \
+      -xkb -noxrecord -noxfixes -noxdamage \
+      -wait 1 -defer 1 \
+      -threads -ncache 10 -ncache_cr \
+      -pointer_mode 4 -input_skip 0 \
+      -allinput -norepeat &
+    sleep 1
+    
+    # Start noVNC for web browser access
+    echo "Starting noVNC web server on port 6080..."
+    /usr/share/novnc/utils/launch.sh --vnc localhost:5900 --listen 6080 &
+    
+    echo "==================================================="
+    echo "VNC is enabled!"
+    echo "Access the emulator UI at: http://localhost:6080"
+    echo "==================================================="
+  else
+    echo "WARNING: VNC requested but Xvfb is not running. VNC will not be available."
+    echo "The emulator will run in headless mode."
+    WINDOW_FLAG="-no-window"
+  fi
+fi
+
+# Set Qt platform plugin based on display availability
+# This prevents "no Qt platform plugin could be initialized" errors
+if [ "$XVFB_READY" = true ]; then
+  export QT_QPA_PLATFORM=xcb
+else
+  export QT_QPA_PLATFORM=offscreen
 fi
 
 # Handle snapshot persistence
@@ -176,6 +236,13 @@ emulator \
   $SNAPSHOT_FLAG \
   -no-audio \
   -no-snapshot-load \
+  -no-metrics \
+  -feature Vulkan \
+  -feature GLDirectMem \
+  -prop ro.adb.secure=0 \
+  -prop ro.secure=0 \
+  -prop ro.debuggable=1 \
+  -prop service.adb.root=1 \
   -skin ${SCREEN_WIDTH}x${SCREEN_HEIGHT} || update_state "ANDROID_STOPPED"
 
 

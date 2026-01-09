@@ -71,8 +71,8 @@ services:
         - IMG_TYPE=google_apis_playstore
     ports:
       - 5554:5554
-      - 127.0.0.1:5555:5555
-      - 6080:6080  # noVNC web UI
+      - 5555:5555         # ADB port (exposed for remote scrcpy access)
+      - 6080:6080         # noVNC web UI
     environment:
       - DISABLE_ANIMATION=true
       - DISABLE_HIDDEN_POLICY=true
@@ -86,8 +86,16 @@ services:
       # NVIDIA GPU settings
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
-      # GPU_MODE: swiftshader_indirect is the most reliable in WSL2/Docker
-      # host mode fails due to Vulkan driver incompatibility
+      # GPU performance optimizations
+      - LIBGL_ALWAYS_INDIRECT=0
+      - __GLX_VENDOR_LIBRARY_NAME=nvidia
+      - __GL_SYNC_TO_VBLANK=0
+      - __GL_THREADED_OPTIMIZATIONS=1
+      # GPU_MODE: Auto-detected based on environment
+      # - Native Linux: Uses 'host' for GPU acceleration
+      # - WSL2/Docker: Uses 'swangle_indirect' for software rendering
+      # Uncomment below to override: host, swangle_indirect, swiftshader_indirect
+      # - GPU_MODE_OVERRIDE=host
     privileged: true
     tty: true
     stdin_open: true
@@ -98,11 +106,11 @@ services:
       - ./keys/adbkey:/root/.android/adbkey:ro
       - ./keys/adbkey.pub:/root/.android/adbkey.pub:ro
       - ./android_avd_store:/data
-      # Mount NVIDIA driver files for GPU access
-      - /usr/lib/wsl:/usr/lib/wsl:ro
+      # Mount NVIDIA driver files for GPU access (WSL-only, commented out for native Linux)
+      # - /usr/lib/wsl:/usr/lib/wsl:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    shm_size: '4gb'                 # Increased shared memory for GPU rendering
+    shm_size: '8gb'                 # Large shared memory for GPU gaming performance
     deploy:
       resources:
         reservations:
