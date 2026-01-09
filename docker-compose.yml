@@ -72,27 +72,41 @@ services:
     ports:
       - 5554:5554
       - 127.0.0.1:5555:5555
+      - 6080:6080  # noVNC web UI
     environment:
-      - DISABLE_ANIMATION=false
+      - DISABLE_ANIMATION=true
       - DISABLE_HIDDEN_POLICY=true
       - SKIP_AUTH=false
-      #- ANDROID_ADB_SERVER_ADDRESS=host.docker.internal
-      - MEMORY=16384
-      - CORES=16
+      - MEMORY=8192
+      - CORES=6
+      - ENABLE_VNC=true
+      - SCREEN_WIDTH=720
+      - SCREEN_HEIGHT=1280
+      - SCREEN_DPI=280
+      # NVIDIA GPU settings
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      # GPU_MODE: swiftshader_indirect is the most reliable in WSL2/Docker
+      # host mode fails due to Vulkan driver incompatibility
     privileged: true
     tty: true
     stdin_open: true
+    devices:
+      - /dev/kvm:/dev/kvm           # KVM hardware acceleration
+      - /dev/dri:/dev/dri           # Direct Rendering Infrastructure for GPU
     volumes:
       - ./keys/adbkey:/root/.android/adbkey:ro
       - ./keys/adbkey.pub:/root/.android/adbkey.pub:ro
-    # volumes:
-    #   - ./:/mnt
+      - ./android_avd_store:/data
+      # Mount NVIDIA driver files for GPU access
+      - /usr/lib/wsl:/usr/lib/wsl:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    shm_size: '4gb'                 # Increased shared memory for GPU rendering
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+              count: all
+              capabilities: [gpu, graphics, utility, compute]

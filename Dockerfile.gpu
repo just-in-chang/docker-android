@@ -6,7 +6,7 @@ LABEL description "A Docker image allowing to run an Android emulator"
 LABEL version "1.2.0"
 ENV DEBIAN_FRONTEND noninteractive
 
-# Installing required packages.
+# Install NVIDIA container toolkit and OpenGL support
 RUN apt update -y && \
   apt install -y --no-install-recommends \
   bash \
@@ -20,10 +20,29 @@ RUN apt update -y && \
   xvfb \
   libgl1-mesa-glx \
   libgl1-mesa-dri \
+  libegl1-mesa \
+  libgles2-mesa \
   socat \
   htop \
-  iproute2 && \
+  iproute2 \
+  x11vnc \
+  novnc \
+  net-tools \
+  supervisor \
+  libnvidia-gl-535 \
+  libnvidia-egl-wayland1 \
+  libglvnd0 \
+  libglvnd-dev \
+  libegl1 \
+  libgles2 \
+  mesa-utils \
+  vulkan-tools && \
   rm -rf /var/lib/apt/lists/*
+
+# Configure NVIDIA runtime environment
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=graphics,utility,compute
+ENV __GLX_VENDOR_LIBRARY_NAME=nvidia
 
 # Arguments that can be overriden at build-time.
 ARG INSTALL_ANDROID_SDK=1
@@ -57,9 +76,9 @@ ENV LD_LIBRARY_PATH "$ANDROID_SDK_ROOT/emulator/lib64:$ANDROID_SDK_ROOT/emulator
 # Set the working directory to /opt
 WORKDIR /opt
 
-# Exposing the Android emulator console port
-# and the ADB port.
-EXPOSE 5554 5555
+# Exposing the Android emulator console port,
+# the ADB port, and VNC/noVNC ports.
+EXPOSE 5554 5555 5900 6080
 
 # Initializing the required directories.
 RUN mkdir /root/.android/ && \
